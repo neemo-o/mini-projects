@@ -47,15 +47,18 @@ Ao final do processamento das threads, escreva um arquivo relatorio.txt dizendo:
 */
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Scanner;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -85,64 +88,70 @@ class LogEntry {
     }
 }
 
-class AnalisadorService extends Thread {
-    private static ArrayList<LogEntry> servidor_logs = new ArrayList<>();
+class AnalisadorService {
+    private List<LogEntry> servidor_logs = new ArrayList<>();
     private ExecutorService pool;
     private AtomicInteger cont = new AtomicInteger();
     private File logs;
+    private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     public AnalisadorService(File logs) {
-        this.pool = Executors.newFixedThreadPool(MAX_PRIORITY);
+        this.pool = Executors.newFixedThreadPool(5);
         this.logs = logs;
     }
 
     public void analisar() {
         try {
-            Scanner rd = new Scanner(logs);
-            while(rd.hasNextLine()) {
-                String[] data = rd.nextLine().split(";");
-                LocalDateTime date = LocalDateTime.parse(data[0]);
-                NivelLog nivel = NivelLog.valueOf(data[1]);
-                servidor_logs.add(new LogEntry(date, nivel, data[2]));
-            }
+            servidor_logs = Files.lines(Paths.get(logs.getPath()))
+                .map(line -> {
+                    try {
+                        String[] data = line.split(";");
+                        LocalDateTime date = LocalDateTime.parse(data[0], formatter);
+                        NivelLog nivel = NivelLog.valueOf(data[1]);
+                        return new LogEntry(date, nivel, data[2]);
+                    } catch (Exception e) {
+                        System.err.println("Linha corrompida ignorada: " + line);
+                        return null;
+                    }
+                })
+                .filter(entry -> entry != null)
+                .collect(Collectors.toList());
 
+            List<LogEntry> filtered_logs = servidor_logs.stream()
+                .filter(e -> e.getNivel() == NivelLog.ERROR)
+                .collect(Collectors.toList());
 
-            List<LogEntry> filtered_logs = servidor_logs.stream().filter((e) -> e.getNivel() == NivelLog.ERROR).collect(Collectors.toList());
-        
             List<Future<?>> tasks = new ArrayList<>();
-            filtered_logs.stream().forEach(
-               (e) ->  tasks.add(pool.submit(() -> cont.getAndIncrement())
-               )
-            );
-
-            for(Future<?> f: tasks) {
-                try {
-                    f.get();
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+            for (LogEntry e : filtered_logs) {
+                tasks.add(pool.submit(() -> {
+                    try {
+                        Thread.sleep(100); // Simula processamento pesado
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                    cont.getAndIncrement();
+                }));
             }
 
-            rd.close();
+            for (Future<?> f : tasks) {
+                f.get();
+            }
+
+            pool.shutdown();
+            pool.awaitTermination(10, TimeUnit.MINUTES);
             this.gerarRelatorio();
-        } catch (FileNotFoundException e) {
-            System.out.println("Arquivo não achado");
+        } catch (Exception e) {
+            System.out.println("Erro ao analisar: " + e.getMessage());
         }
-
     }
 
-    public void fechar() {
-        pool.shutdown();
-    }
+
 
     public void gerarRelatorio() {
-        try {
-            FileWriter w = new FileWriter("resultado.txt");
-            w.write("Analise finalizada com sucesso! Quantidade total de erros críticos encontrados: " + this.cont.get());
-            w.close();
-            this.fechar();
+        try (FileWriter w = new FileWriter("relatorio.txt")) {
+            w.write("Análise finalizada. Total de Erros Críticos encontrados: " + this.cont.get());
         } catch (Exception e) {
-           e.printStackTrace();
+            e.printStackTrace();
         }
     }
 }
