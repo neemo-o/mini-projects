@@ -147,7 +147,7 @@ class AnalisadorService extends Thread {
     }
 }
 
-public class Main {
+public class Analisador {
 
     public static void main(String[] args) {
         File servidorLogs = new File("servidor.log");
